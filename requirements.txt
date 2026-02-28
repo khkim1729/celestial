@@ -1,0 +1,17 @@
+# HAEDAL requirements
+# Python 3.10  |  CUDA 12.6
+#
+# Install:
+#   Step 1 — PyTorch (CUDA 12.4 wheel, compatible with CUDA 12.6)
+#   pip install torch==2.5.1+cu124 torchvision==0.20.1+cu124 \
+#       --index-url https://download.pytorch.org/whl/cu124
+#
+#   Step 2 — 나머지
+#   pip install numpy Pillow nibabel scikit-learn
+
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+numpy
+Pillow>=10.0
+nibabel
+scikit-learn>=1.3
