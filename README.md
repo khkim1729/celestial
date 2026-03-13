@@ -182,12 +182,14 @@ numpy
 Pillow>=10.0
 nibabel
 scikit-learn>=1.3
+opencv-python
+matplotlib
 ```
 
 ```bash
 pip install torch==2.5.1+cu124 torchvision==0.20.1+cu124 \
     --index-url https://download.pytorch.org/whl/cu124
-pip install numpy Pillow nibabel scikit-learn
+pip install numpy Pillow nibabel scikit-learn opencv-python matplotlib
 ```
 
 ---

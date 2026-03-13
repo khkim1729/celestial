@@ -37,7 +37,7 @@ class HAEDALConfig:
     # Output
     output_dir:       str = "output"
     experiment_name:  str = "haedal"
-    save_best_metric: str = "idh_auc"   # key from metrics dict
+    save_best_metric: str = "score"   # key from metrics dict
 
     # Device
     device: str = "cuda"
@@ -45,6 +45,9 @@ class HAEDALConfig:
     # Early stopping (0 = 비활성화)
     early_stop_patience:  int   = 15
     early_stop_min_delta: float = 1e-4
+
+    # Preprocessing
+    mask_brain: bool = False   # True: 뇌 외부 near-zero 픽셀 마스킹
 
     # Paths — CSV 내 상대경로의 기준 디렉토리 (빈 문자열이면 변환 없음)
     base_dir: str = ""

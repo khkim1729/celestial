@@ -15,21 +15,21 @@ class HierarchicalGliomaClassifier(nn.Module):
 
         # 3. Task 1: IDH Status (상위 단계)
         self.idh_head = nn.Sequential(
-            nn.Linear(embed_dim, 512), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(embed_dim, 512), nn.GELU(), nn.Dropout(0.3),
             nn.Linear(512, 2) # Mutant vs Wild-type
         )
 
         # 4. Task 2: 1p/19q Co-deletion (IDH 결과에 의존)
         self.idh_embed = nn.Linear(2, 128) # IDH 결과를 특징으로 변환
         self.codel_head = nn.Sequential(
-            nn.Linear(embed_dim + 128, 512), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(embed_dim + 128, 512), nn.GELU(), nn.Dropout(0.3),
             nn.Linear(512, 2)
         )
 
         # 5. Task 3: WHO Grade (IDH & 1p19q 결과에 모두 의존)
         self.genetic_embed = nn.Linear(4, 256) # IDH(2) + 1p19q(2) 결과를 통합
         self.grade_head = nn.Sequential(
-            nn.Linear(embed_dim + 256, 512), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(embed_dim + 256, 512), nn.GELU(), nn.Dropout(0.3),
             nn.Linear(512, num_grades)
         )
 
@@ -47,12 +47,12 @@ class HierarchicalGliomaClassifier(nn.Module):
         idh_logits = self.idh_head(shared_features)
         
         # Step 2: 1p19q (IDH 정보를 컨텍스트로 주입)
-        idh_info = F.relu(self.idh_embed(idh_logits))
+        idh_info = F.gelu(self.idh_embed(idh_logits))
         codel_input = torch.cat([shared_features, idh_info], dim=-1)
         codel_logits = self.codel_head(codel_input)
 
         # Step 3: Grade (IDH + 1p19q 통합 정보를 컨텍스트로 주입)
-        genetic_info = F.relu(self.genetic_embed(torch.cat([idh_logits, codel_logits], dim=-1)))
+        genetic_info = F.gelu(self.genetic_embed(torch.cat([idh_logits, codel_logits], dim=-1)))
         grade_input = torch.cat([shared_features, genetic_info], dim=-1)
         grade_logits = self.grade_head(grade_input)
 

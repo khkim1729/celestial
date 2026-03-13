@@ -65,8 +65,12 @@ def main():
     parser.add_argument("--w_idh",       type=float, default=3.0)
     parser.add_argument("--w_codel",     type=float, default=1.0)
     parser.add_argument("--w_grade",     type=float, default=1.0)
-    parser.add_argument("--save_best",   default="idh_auc",
+    parser.add_argument("--save_best",   default="score",
                         dest="save_best_metric")
+    parser.add_argument("--clinical_dim", type=int, default=64,
+                        help="ClinicalEncoder 출력 차원 (0 = clinical 미사용)")
+    parser.add_argument("--mask_brain",  action="store_true",
+                        help="뇌 외부 near-zero 픽셀 마스킹")
     args = parser.parse_args()
 
     base = Path(args.base_dir).resolve()
@@ -108,6 +112,8 @@ def main():
         w_grade          = args.w_grade,
         save_best_metric = args.save_best_metric,
         base_dir         = str(base),
+        clinical_dim     = args.clinical_dim,
+        mask_brain       = args.mask_brain,
     )
 
     HAEDALTrainer(cfg).train()

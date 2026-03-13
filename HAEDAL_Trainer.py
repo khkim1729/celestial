@@ -180,7 +180,11 @@ class HAEDALTrainer:
             self.history["val"].append(vl)
             self._save(ep, score, "latest.pt")
 
-            cur = self._pick(vl, cfg.save_best_metric)
+            if (cfg.save_best_metric == "score"):
+                cur = score
+            else : 
+                cur = self._pick(vl, cfg.save_best_metric)
+
             if cur > self.best_score:
                 self.best_score = cur
                 self._save(ep, score, "best.pt")

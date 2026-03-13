@@ -11,11 +11,10 @@ CSV 포맷 (한 행 = subject, 총 12 PNG + 라벨):
     FLAIR_axial, FLAIR_coronal, FLAIR_sagittal,
     idh, codel, grade, age, sex
 
-Dataset 아이템 (한 subject → 4샘플):
-    modality T1   : [axial_T1.png, coronal_T1.png, sagittal_T1.png]   → [3, H, W]
-    modality T1ce : [axial_T1ce.png, ...]                              → [3, H, W]
-    modality T2   : ...
-    modality FLAIR: ...
+Dataset 아이템 (한 subject → 1 샘플):
+    image : [4, 3, H, W]
+            dim 0 : modality  (T1 / T1ce / T2 / FLAIR)
+            dim 1 : axis      (axial / coronal / sagittal)
 
 Labels (int):
     idh   : 0=wild-type  1=mutant            (-1 = unknown)
@@ -29,7 +28,8 @@ Clinical:
 
 import csv
 import os
-from typing import Dict, List, Tuple
+import random
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -44,21 +44,32 @@ MODALITIES = ("T1", "T1ce", "T2", "FLAIR")
 AXES       = ("axial", "coronal", "sagittal")
 
 
+def _brain_mask(img: np.ndarray) -> np.ndarray:
+    """
+    img: [H, W] float32 [0, 1]
+    near-zero 배경 픽셀을 0으로 만드는 binary mask 반환.
+    임계값 = max × 2% (이미지가 거의 검으면 전부 1 반환).
+    """
+    peak = img.max()
+    if peak < 1.0 / 255:          # 거의 검은 이미지
+        return np.ones_like(img)
+    thresh = peak * 0.02
+    return (img > thresh).astype(np.float32)
+
+
 class HAEDALDataset(Dataset):
     def __init__(self, csv_path: str, cfg: HAEDALConfig, augment: bool = False):
         self.cfg      = cfg
         self.augment  = augment
-        self.base_dir = cfg.base_dir   # 상대경로 기준 디렉토리 (빈 문자열이면 그대로)
-        # items: (record_dict, modality)  — 4 items per subject row
+        self.base_dir = cfg.base_dir
         self.items    = self._load_csv(csv_path)
 
     def _abs(self, path: str) -> str:
-        """상대경로인 경우 base_dir 기준 절대경로로 변환."""
         if self.base_dir and not os.path.isabs(path):
             return os.path.join(self.base_dir, path)
         return path
 
-    def _load_csv(self, path: str) -> List[Tuple[Dict, str]]:
+    def _load_csv(self, path: str) -> List[Dict]:
         with open(path, newline="") as f:
             rows = list(csv.DictReader(f))
         items = []
@@ -71,51 +82,64 @@ class HAEDALDataset(Dataset):
                 "grade":      int(r.get("grade", -1)),
                 "age_group":  ag,
                 "sex_bin":    sx,
-                # 12 PNG paths keyed as "{mod}_{axis}"
                 **{f"{mod}_{axis}": r[f"{mod}_{axis}"]
                    for mod in MODALITIES for axis in AXES},
             }
-            for mod in MODALITIES:
-                items.append((rec, mod))
+            items.append(rec)   # 1 subject → 1 item
         return items
 
     def __len__(self):
         return len(self.items)
 
     def __getitem__(self, idx):
-        rec, mod = self.items[idx]
-        img_size  = self.cfg.img_size
+        rec      = self.items[idx]
+        img_size = self.cfg.img_size
 
-        # 3채널 = 3축 (axial / coronal / sagittal)
-        channels = []
-        for axis in AXES:
-            pil = Image.open(self._abs(rec[f"{mod}_{axis}"])).convert("L")
-            if pil.size != (img_size, img_size):
-                pil = pil.resize((img_size, img_size), Image.BILINEAR)
-            channels.append(np.array(pil, dtype=np.float32) / 255.0)
+        # 4 modalities, 각각 3채널(3축) → [4, 3, H, W]
+        modality_imgs = []
+        for mod in MODALITIES:
+            channels = []
+            for axis in AXES:
+                pil = Image.open(self._abs(rec[f"{mod}_{axis}"])).convert("L")
+                if pil.size != (img_size, img_size):
+                    pil = pil.resize((img_size, img_size), Image.BILINEAR)
+                arr = np.array(pil, dtype=np.float32) / 255.0
+                if self.cfg.mask_brain:
+                    arr = arr * _brain_mask(arr)
+                channels.append(arr)
+            modality_imgs.append(np.stack(channels, axis=0))  # [3, H, W]
 
-        img = torch.from_numpy(np.stack(channels, axis=0))   # [3, H, W]
+        imgs = torch.from_numpy(np.stack(modality_imgs, axis=0))  # [4, 3, H, W]
+
         if self.augment:
-            img = self._aug(img)
+            imgs = self._aug(imgs)
 
         return {
-            "image":      img,
+            "image":      imgs,
             "idh":        torch.tensor(rec["idh"],       dtype=torch.long),
             "codel":      torch.tensor(rec["codel"],     dtype=torch.long),
             "grade":      torch.tensor(rec["grade"],     dtype=torch.long),
             "age_group":  torch.tensor(rec["age_group"], dtype=torch.long),
             "sex_bin":    torch.tensor(rec["sex_bin"],   dtype=torch.long),
             "subject_id": rec["subject_id"],
-            "modality":   mod,
         }
 
     @staticmethod
-    def _aug(img: torch.Tensor) -> torch.Tensor:
-        import random
-        if random.random() < 0.5: img = TF.hflip(img)
-        if random.random() < 0.5: img = TF.vflip(img)
-        if random.random() < 0.3: img = TF.rotate(img, float(random.randint(-15, 15)))
-        return img
+    def _aug(imgs: torch.Tensor) -> torch.Tensor:
+        """4 modality 에 동일한 랜덤 변환을 적용해 공간 정합성 유지."""
+        do_hflip  = random.random() < 0.5
+        do_vflip  = random.random() < 0.5
+        do_rotate = random.random() < 0.3
+        angle     = float(random.randint(-15, 15))
+
+        augmented = []
+        for i in range(imgs.shape[0]):   # iterate over modalities
+            img = imgs[i]
+            if do_hflip:  img = TF.hflip(img)
+            if do_vflip:  img = TF.vflip(img)
+            if do_rotate: img = TF.rotate(img, angle)
+            augmented.append(img)
+        return torch.stack(augmented, dim=0)
 
 
 def make_loader(csv_path: str, cfg: HAEDALConfig, split: str = "train") -> DataLoader:

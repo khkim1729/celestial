@@ -47,9 +47,25 @@ def main():
     parser.add_argument("--batch_size",      type=int, default=16)
     parser.add_argument("--device",          default="cuda")
     parser.add_argument("--gradcam",         action="store_true",
-                        help="Grad-CAM 시각화 생성 (requires: pip install grad-cam)")
+                        help="Grad-CAM 시각화 생성")
     parser.add_argument("--gradcam_samples", type=int, default=None,
                         help="Grad-CAM 생성 최대 샘플 수 (기본: 전체)")
+    parser.add_argument("--clinical_plot",   action="store_true",
+                        help="임상 feature (age/sex) 영향 시각화")
+    parser.add_argument("--clinical_samples", type=int, default=None,
+                        help="clinical_plot 최대 샘플 수 (기본: 전체)")
+    # TTA
+    parser.add_argument("--tta",   action="store_true", help="Test Time Augmentation")
+    parser.add_argument("--tta_n", type=int, default=8,
+                        help="TTA augmentation 횟수 (기본: 8)")
+    # TTT
+    parser.add_argument("--ttt",       action="store_true", help="Test Time Training (entropy minimization)")
+    parser.add_argument("--ttt_steps", type=int,   default=10,   help="TTT gradient steps (기본: 10)")
+    parser.add_argument("--ttt_lr",    type=float, default=1e-4, help="TTT learning rate (기본: 1e-4)")
+    parser.add_argument("--clinical_dim", type=int, default=64,
+                        help="ClinicalEncoder 출력 차원 (0 = clinical 미사용, 학습 시와 동일하게 설정)")
+    parser.add_argument("--mask_brain",  action="store_true",
+                        help="뇌 외부 near-zero 픽셀 마스킹")
     args = parser.parse_args()
 
     base = Path(args.base_dir).resolve()
@@ -76,13 +92,20 @@ def main():
         num_workers     = args.num_workers,
         device          = args.device,
         base_dir        = str(base),
+        clinical_dim    = args.clinical_dim,
+        mask_brain      = args.mask_brain,
     )
 
     tester = HAEDALTester(cfg, checkpoint=checkpoint)
-    tester.evaluate(test_csv)
+    tester.evaluate(test_csv,
+                    use_tta=args.tta, tta_n=args.tta_n,
+                    use_ttt=args.ttt, ttt_steps=args.ttt_steps, ttt_lr=args.ttt_lr)
 
     if args.gradcam:
         tester.gradcam(test_csv, max_samples=args.gradcam_samples)
+
+    if args.clinical_plot:
+        tester.clinical_plot(test_csv, max_samples=args.clinical_samples)
 
 
 if __name__ == "__main__":

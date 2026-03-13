@@ -56,6 +56,49 @@ AXES       = {"axial": 2, "coronal": 1, "sagittal": 0}
 MODALITIES = ["T1", "T1ce", "T2", "FLAIR"]
 GRADE_MAP  = {"2": 0, "3": 1, "4": 2}
 
+def normalize_volume(v: np.ndarray) -> np.ndarray:
+    v = np.nan_to_num(v.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    fg = v > 0
+    if np.any(fg):
+        vals = v[fg]
+        p1, p99 = np.percentile(vals, [1, 99])
+        v = np.clip(v, p1, p99)
+        if p99 - p1 > 1e-8:
+            v = (v - p1) / (p99 - p1)
+        else:
+            v = np.zeros_like(v, dtype=np.float32)
+    else:
+        v = np.zeros_like(v, dtype=np.float32)
+    return np.clip(v, 0, 1)
+
+def compute_brain_bbox(volumes: dict, eps: float = 1e-6, margin: int = 1):
+    fg = None
+    for v in volumes.values():
+        cur = v > eps
+        fg = cur if fg is None else (fg | cur)
+
+    coords = np.where(fg)
+    if len(coords[0]) == 0:
+        shape = next(iter(volumes.values())).shape
+        return (0, shape[0], 0, shape[1], 0, shape[2])
+
+    x1, x2 = coords[0].min(), coords[0].max()
+    y1, y2 = coords[1].min(), coords[1].max()
+    z1, z2 = coords[2].min(), coords[2].max()
+
+    shape = next(iter(volumes.values())).shape
+    x1 = max(0, x1 - margin)
+    x2 = min(shape[0], x2 + 1 + margin)
+    y1 = max(0, y1 - margin)
+    y2 = min(shape[1], y2 + 1 + margin)
+    z1 = max(0, z1 - margin)
+    z2 = min(shape[2], z2 + 1 + margin)
+
+    return x1, x2, y1, y2, z1, z2
+
+def crop_3d(vol: np.ndarray, bbox):
+    x1, x2, y1, y2, z1, z2 = bbox
+    return vol[x1:x2, y1:y2, z1:z2]
 
 # ── 단일 subject 처리 ──────────────────────────────────────────────────────────
 
@@ -71,12 +114,16 @@ def process_subject(row: dict, out_dir: str, img_size: int, base_dir: str):
 
     try:
         volumes = {
-            "T1":    load_nifti(row["t1"]),
-            "T1ce":  load_nifti(row["t1ce"]),
-            "T2":    load_nifti(row["t2"]),
-            "FLAIR": load_nifti(row["flair"]),
+            "T1":    normalize_volume(load_nifti(row["t1"])),
+            "T1ce":  normalize_volume(load_nifti(row["t1ce"])),
+            "T2":    normalize_volume(load_nifti(row["t2"])),
+            "FLAIR": normalize_volume(load_nifti(row["flair"])),
         }
-        mask = (load_nifti(row["seg"]) > 0).astype(np.uint8)
+        mask = (load_nifti(row["mask"]) > 0).astype(np.uint8)
+
+        bbox = compute_brain_bbox(volumes, eps=1e-6, margin=5)
+        volumes = {k: crop_3d(v, bbox) for k, v in volumes.items()}
+        mask = crop_3d(mask, bbox)
 
         saved = {}
         for axis_name, axis_idx in AXES.items():
@@ -84,8 +131,6 @@ def process_subject(row: dict, out_dir: str, img_size: int, base_dir: str):
             saved[axis_name] = {}
             for mod in MODALITIES:
                 sl = np.take(volumes[mod], n, axis=axis_idx).astype(np.float32)
-                mn, mx = sl.min(), sl.max()
-                sl = (sl - mn) / (mx - mn + 1e-8)
                 pil = Image.fromarray(
                     (sl * 255).clip(0, 255).astype(np.uint8), mode="L"
                 ).resize((img_size, img_size), Image.BILINEAR)
@@ -112,7 +157,7 @@ def build_labeled_csv(
     labels = {}
     with open(label_csv, newline="", encoding="utf-8-sig") as f:
         for r in csv.DictReader(f):
-            sid = r["Subject"].strip()
+            sid = r["subject_id"].strip()
             labels[sid] = {
                 "idh":   int(r["IDH"]),
                 "codel": int(r["1p19q"]),
@@ -138,7 +183,7 @@ def build_labeled_csv(
     fields   = ["subject_id"] + png_cols + ["idh", "codel", "grade", "age", "sex"]
 
     Path(csv_out).mkdir(parents=True, exist_ok=True)
-    for fname, sid_set in [("EGD_train.csv", train_set), ("EGD_test.csv", test_set)]:
+    for fname, sid_set in [("PDGM_train.csv", train_set), ("PDGM_test.csv", test_set)]:
         rows = []
         for sid in sorted(sid_set):
             if sid not in labels:

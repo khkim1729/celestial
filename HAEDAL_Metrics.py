@@ -77,10 +77,17 @@ def compute_metrics(results: Dict) -> Dict:
 
     accs = [m["acc"] for m in out.values() if "acc" in m]
     idh_auc = out.get("idh", {}).get("auc")
+    codel_auc = out.get("codel", {}).get("auc")
+    grade_auc = out.get("grade", {}).get("auc_ovo")
+    
+    idh_auc = idh_auc if idh_auc is not None else 0.0
+    codel_auc = codel_auc if codel_auc is not None else 0.0
+    grade_auc = grade_auc if grade_auc is not None else 0.0
+
     mean_acc = float(np.mean(accs)) if accs else 0.0
     out["overall"] = {
         "mean_acc": round(mean_acc, 4),
-        "score":    round((mean_acc + idh_auc) / 2, 4) if idh_auc else mean_acc,
+        "score":    round((idh_auc + codel_auc + grade_auc) / 3, 4),
     }
     return out
 

@@ -34,10 +34,10 @@ class ClinicalEncoder(nn.Module):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(2, 64),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(0.1),
             nn.Linear(64, output_dim),
-            nn.ReLU(),
+            nn.GELU(),
         )
 
     def forward(self, age_group: torch.Tensor, sex: torch.Tensor) -> torch.Tensor:
@@ -54,6 +54,8 @@ class HierarchicalGliomaClassifierWithClinical(nn.Module):
     """
     Drop-in replacement for HierarchicalGliomaClassifier.
     forward(x, age_group, sex) → (idh_logits, codel_logits, grade_logits)
+
+    clinical_dim=0 : ClinicalEncoder 생략, 이미지 피처만 사용
     """
     def __init__(self, num_grades: int = 3, freeze_backbone: bool = True,
                  clinical_dim: int = 64):
@@ -61,24 +63,26 @@ class HierarchicalGliomaClassifierWithClinical(nn.Module):
         self.base = HierarchicalGliomaClassifier(
             num_grades=num_grades, freeze_backbone=freeze_backbone
         )
-        self.clinical = ClinicalEncoder(output_dim=clinical_dim)
+        self.clinical_dim = clinical_dim
+        if clinical_dim > 0:
+            self.clinical = ClinicalEncoder(output_dim=clinical_dim)
 
         embed_dim = 1536
-        fused_dim = embed_dim + clinical_dim
+        fused_dim = embed_dim + clinical_dim  # clinical_dim=0 이면 1536
 
         # Hierarchical heads (mirror base classifier, input width = fused_dim)
         self.idh_head = nn.Sequential(
-            nn.Linear(fused_dim, 512), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(fused_dim, 512), nn.GELU(), nn.Dropout(0.3),
             nn.Linear(512, 2),
         )
         self.idh_embed     = nn.Linear(2, 128)
         self.codel_head    = nn.Sequential(
-            nn.Linear(fused_dim + 128, 512), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(fused_dim + 128, 512), nn.GELU(), nn.Dropout(0.3),
             nn.Linear(512, 2),
         )
         self.genetic_embed = nn.Linear(4, 256)
         self.grade_head    = nn.Sequential(
-            nn.Linear(fused_dim + 256, 512), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(fused_dim + 256, 512), nn.GELU(), nn.Dropout(0.3),
             nn.Linear(512, num_grades),
         )
 
@@ -88,14 +92,20 @@ class HierarchicalGliomaClassifierWithClinical(nn.Module):
     def forward(self, x: torch.Tensor,
                 age_group: torch.Tensor,
                 sex: torch.Tensor):
-        img_feat  = self.base.backbone(x)                        # [B, 1536]
-        clin_feat = self.clinical(age_group, sex)                # [B, clinical_dim]
-        fused     = torch.cat([img_feat, clin_feat], dim=-1)    # [B, fused_dim]
+        # x: [B, 4, 3, H, W]  — 4 modalities per subject
+        B, M, C, H, W = x.shape
+        feat_flat = self.base.backbone(x.view(B * M, C, H, W))  # [B*4, 1536]
+        img_feat  = feat_flat.view(B, M, -1).mean(dim=1)        # [B, 1536]
+        if self.clinical_dim > 0:
+            clin_feat = self.clinical(age_group, sex)            # [B, clinical_dim]
+            fused = torch.cat([img_feat, clin_feat], dim=-1)    # [B, 1536+clinical_dim]
+        else:
+            fused = img_feat                                     # [B, 1536]
 
         idh_logits   = self.idh_head(fused)
-        idh_info     = F.relu(self.idh_embed(idh_logits))
+        idh_info     = F.gelu(self.idh_embed(idh_logits))
         codel_logits = self.codel_head(torch.cat([fused, idh_info], dim=-1))
-        genetic_info = F.relu(self.genetic_embed(
+        genetic_info = F.gelu(self.genetic_embed(
             torch.cat([idh_logits, codel_logits], dim=-1)
         ))
         grade_logits = self.grade_head(torch.cat([fused, genetic_info], dim=-1))
