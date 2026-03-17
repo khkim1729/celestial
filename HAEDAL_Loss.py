@@ -25,23 +25,24 @@ class HierarchicalGliomaLoss(nn.Module):
         l_codel = self.ce(codel_p, codel_t.clamp(min=0)) * codel_valid  # [B]
         l_grade = self.ce(grade_p, grade_t.clamp(min=0)) * grade_valid  # [B]
 
-        # 3. IDH dependency mask
-        #    IDH label이 없는 샘플은 wrong=0 처리 (dependency_mask=1 유지)
-        with torch.no_grad():
-            idh_pred_labels   = torch.argmax(idh_p,   dim=1)
-            codel_pred_labels = torch.argmax(codel_p, dim=1)
+        # 3. IDH dependency mask & Penalty (최소 수정 버전)
+        
+        # 확률값 계산 (softmax)
+        idh_probs = torch.softmax(idh_p, dim=1)
+        codel_probs = torch.softmax(codel_p, dim=1)
 
-            is_idh_wrong = torch.zeros(idh_t.shape[0], device=idh_t.device)
-            known = idh_valid.bool()
-            if known.any():
-                is_idh_wrong[known] = (
-                    idh_pred_labels[known] != idh_t[known]
-                ).float()
-            dependency_mask = 1.0 - (is_idh_wrong * 0.8)
+        # 1) Dependency Mask
+        target_idx = idh_t.clamp(min=0).unsqueeze(1)
+        prob_wrong = 1.0 - idh_probs.gather(1, target_idx).squeeze(1)
+        
+        # 0.8(ablation 대상)이 이제 학습에 반영됩니다.
+        dependency_mask = 1.0 - (prob_wrong * 0.8) 
 
-            # IDH-wt 예측 & 1p19q-codel 예측 → 불일치 페널티 (예측만으로 결정)
-            inconsistent  = ((idh_pred_labels == 0) & (codel_pred_labels == 1)).float()
-            penalty_const = inconsistent * 2.0
+        # 2) Penalty
+        # IDH-wt(0번) 확률 * Codel-1(1번) 확률
+        inconsistent_soft = idh_probs[:, 0] * codel_probs[:, 1]
+        
+        penalty_const = inconsistent_soft * 0.0 
 
         # 4. 유효 샘플 수 기준 평균 (최소 1로 clamp)
         n_idh   = idh_valid.sum().clamp(min=1)
